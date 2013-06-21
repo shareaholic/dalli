@@ -55,8 +55,7 @@ module ActiveSupport
       end
 
       def data
-        self.clients[Thread.current.object_id] ||= Dalli::Client.new(self.servers, @options)
-        self.clients[Thread.current.object_id]
+        self.class.clients[Thread.current.object_id] ||= Dalli::Client.new(self.class.servers, @options)
       end
 
       ##
