@@ -358,6 +358,16 @@ describe 'ActiveSupport' do
     end
   end
 
+  it 'handle passing in anything to the client' do
+    with_activesupport do
+      memcached do
+        connect
+        exception = [ArgumentError, { :message => "Please pass in a block to me executed in the context of the client" }]
+        assert_raises(*exception) { @dalli.dalli 'foo' }
+      end
+    end
+  end
+
   it 'normalize options as expected' do
     with_activesupport do
       memcached do

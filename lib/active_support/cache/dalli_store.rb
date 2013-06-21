@@ -54,8 +54,12 @@ module ActiveSupport
       # Access the underlying Dalli::Client instance for
       # access to get_multi, etc.
       def dalli
-        @pool.with do |mc|
-          yield(mc)
+        if block_given?
+          @pool.with do |mc|
+            yield(mc)
+          end
+        else
+          raise ArgumentError, "Please pass in a block to me executed in the context of the client"
         end
       end
 
