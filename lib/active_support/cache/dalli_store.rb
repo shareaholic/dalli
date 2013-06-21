@@ -6,8 +6,11 @@ module ActiveSupport
     class DalliStore
 
       attr_reader :silence, :options
-      class_attribute :clients, :servers
       alias_method :silence?, :silence
+
+      class << self
+        attr_accessor :clients, :servers
+      end
 
       # Silence the logger.
       def silence!
@@ -51,11 +54,16 @@ module ActiveSupport
         extend Strategy::LocalCache
       end
 
+      def data
+        self.clients[Thread.current.object_id] ||= Dalli::Client.new(self.servers, @options)
+        self.clients[Thread.current.object_id]
+      end
+
       ##
       # Access the underlying Dalli::Client instance for
       # access to get_multi, etc.
       def dalli
-        get_data
+        @data
       end
 
       def fetch(name, options=nil)
@@ -141,7 +149,7 @@ module ActiveSupport
             end
           end
 
-          results.merge!(get_data.get_multi(mapping.keys - results.keys))
+          results.merge!(@data.get_multi(mapping.keys - results.keys))
           results.inject({}) do |memo, (inner, _)|
             entry = results[inner]
             # NB Backwards data compatibility, to be removed at some point
@@ -164,7 +172,7 @@ module ActiveSupport
         initial = options.has_key?(:initial) ? options[:initial] : amount
         expires_in = options[:expires_in]
         instrument(:increment, name, :amount => amount) do
-          get_data.incr(name, amount, expires_in, initial)
+          @data.incr(name, amount, expires_in, initial)
         end
       rescue Dalli::DalliError => e
         logger.error("DalliError: #{e.message}") if logger
@@ -183,7 +191,7 @@ module ActiveSupport
         initial = options.has_key?(:initial) ? options[:initial] : 0
         expires_in = options[:expires_in]
         instrument(:decrement, name, :amount => amount) do
-          get_data.decr(name, amount, expires_in, initial)
+          @data.decr(name, amount, expires_in, initial)
         end
       rescue Dalli::DalliError => e
         logger.error("DalliError: #{e.message}") if logger
@@ -195,7 +203,7 @@ module ActiveSupport
       # be used with care when using a shared cache.
       def clear(options=nil)
         instrument(:clear, 'flushing all keys') do
-          get_data.flush_all
+          @data.flush_all
         end
       rescue Dalli::DalliError => e
         logger.error("DalliError: #{e.message}") if logger
@@ -209,11 +217,11 @@ module ActiveSupport
 
       # Get the statistics from the memcached servers.
       def stats
-        get_data.stats
+        @data.stats
       end
 
       def reset
-        get_data.reset
+        @data.reset
       end
 
       def logger
@@ -228,7 +236,7 @@ module ActiveSupport
 
       # Read an entry from the cache.
       def read_entry(key, options) # :nodoc:
-        entry = get_data.get(key, options)
+        entry = @data.get(key, options)
         # NB Backwards data compatibility, to be removed at some point
         entry.is_a?(ActiveSupport::Cache::Entry) ? entry.value : entry
       rescue Dalli::DalliError => e
@@ -243,7 +251,7 @@ module ActiveSupport
         cleanup if options[:unless_exist]
         method = options[:unless_exist] ? :add : :set
         expires_in = options[:expires_in]
-        get_data.send(method, key, value, expires_in, options)
+        @data.send(method, key, value, expires_in, options)
       rescue Dalli::DalliError => e
         logger.error("DalliError: #{e.message}") if logger
         raise if @raise_errors
@@ -252,7 +260,7 @@ module ActiveSupport
 
       # Delete an entry from the cache.
       def delete_entry(key, options) # :nodoc:
-        get_data.delete(key)
+        @data.delete(key)
       rescue Dalli::DalliError => e
         logger.error("DalliError: #{e.message}") if logger
         raise if @raise_errors
@@ -296,12 +304,6 @@ module ActiveSupport
       def log(operation, key, options=nil)
         return unless logger && logger.debug? && !silence?
         logger.debug("Cache #{operation}: #{key}#{options.blank? ? "" : " (#{options.inspect})"}")
-      end
-
-      def get_data
-          self.clients[Thread.current.object_id] ||= Dalli::Client.new(self.servers, @options)
-          self.clients[Thread.current.object_id]
-        end
       end
 
     end
