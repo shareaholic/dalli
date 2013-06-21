@@ -1,5 +1,6 @@
 # encoding: ascii
 require 'dalli'
+require 'connection_pool'
 
 module ActiveSupport
   module Cache
@@ -7,10 +8,6 @@ module ActiveSupport
 
       attr_reader :silence, :options
       alias_method :silence?, :silence
-
-      class << self
-        attr_accessor :clients, :servers
-      end
 
       # Silence the logger.
       def silence!
@@ -48,21 +45,22 @@ module ActiveSupport
                   else
                     addresses
                   end
-        self.class.clients = {}
-        self.class.servers = servers
+        @pool = ConnectionPool.new(:size => @options[:pool_size] || 5, :timeout => @options[:pool_size] || 5) { Dalli::Client.new(servers, @options) }
 
         extend Strategy::LocalCache
-      end
-
-      def data
-        self.class.clients[Thread.current.object_id] ||= Dalli::Client.new(self.class.servers, @options)
       end
 
       ##
       # Access the underlying Dalli::Client instance for
       # access to get_multi, etc.
       def dalli
-        data
+        if block_given?
+          @pool.with do |mc|
+            yield(mc)
+          end
+        else
+          raise ArgumentError, "Please pass in a block to me executed in the context of the client"
+        end
       end
 
       def fetch(name, options=nil)
@@ -148,7 +146,11 @@ module ActiveSupport
             end
           end
 
-          results.merge!(data.get_multi(mapping.keys - results.keys))
+          results.merge!(
+              @pool.with do |mc|
+                mc.get_multi(mapping.keys - results.keys)
+              end
+          )
           results.inject({}) do |memo, (inner, _)|
             entry = results[inner]
             # NB Backwards data compatibility, to be removed at some point
@@ -171,7 +173,9 @@ module ActiveSupport
         initial = options.has_key?(:initial) ? options[:initial] : amount
         expires_in = options[:expires_in]
         instrument(:increment, name, :amount => amount) do
-          data.incr(name, amount, expires_in, initial)
+          @pool.with do |mc|
+            mc.incr(name, amount, expires_in, initial)
+          end
         end
       rescue Dalli::DalliError => e
         logger.error("DalliError: #{e.message}") if logger
@@ -190,7 +194,9 @@ module ActiveSupport
         initial = options.has_key?(:initial) ? options[:initial] : 0
         expires_in = options[:expires_in]
         instrument(:decrement, name, :amount => amount) do
-          data.decr(name, amount, expires_in, initial)
+          @pool.with do |mc|
+            mc.decr(name, amount, expires_in, initial)
+          end
         end
       rescue Dalli::DalliError => e
         logger.error("DalliError: #{e.message}") if logger
@@ -202,7 +208,9 @@ module ActiveSupport
       # be used with care when using a shared cache.
       def clear(options=nil)
         instrument(:clear, 'flushing all keys') do
-          data.flush_all
+          @pool.with do |mc|
+            mc.flush_all
+          end
         end
       rescue Dalli::DalliError => e
         logger.error("DalliError: #{e.message}") if logger
@@ -216,11 +224,15 @@ module ActiveSupport
 
       # Get the statistics from the memcached servers.
       def stats
-        data.stats
+        @pool.with do |mc|
+          mc.stats
+        end
       end
 
       def reset
-        data.reset
+        @pool.with do |mc|
+          mc.reset
+        end
       end
 
       def logger
@@ -235,7 +247,9 @@ module ActiveSupport
 
       # Read an entry from the cache.
       def read_entry(key, options) # :nodoc:
-        entry = data.get(key, options)
+        entry = @pool.with do |mc|
+          mc.get(key, options)
+        end
         # NB Backwards data compatibility, to be removed at some point
         entry.is_a?(ActiveSupport::Cache::Entry) ? entry.value : entry
       rescue Dalli::DalliError => e
@@ -250,7 +264,9 @@ module ActiveSupport
         cleanup if options[:unless_exist]
         method = options[:unless_exist] ? :add : :set
         expires_in = options[:expires_in]
-        data.send(method, key, value, expires_in, options)
+        @pool.with do |mc|
+          mc.send(method, key, value, expires_in, options)
+        end
       rescue Dalli::DalliError => e
         logger.error("DalliError: #{e.message}") if logger
         raise if @raise_errors
@@ -259,7 +275,9 @@ module ActiveSupport
 
       # Delete an entry from the cache.
       def delete_entry(key, options) # :nodoc:
-        data.delete(key)
+        @pool.with do |mc|
+          mc.delete(key)
+        end
       rescue Dalli::DalliError => e
         logger.error("DalliError: #{e.message}") if logger
         raise if @raise_errors
