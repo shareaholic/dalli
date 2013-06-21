@@ -344,12 +344,38 @@ describe 'ActiveSupport' do
     end
   end
 
+  it 'handle passing in an arbitrary block of commands for the client' do
+    with_activesupport do
+      memcached do
+        connect
+        key = "abc"
+        value = 'def'
+        @dalli.dalli do |c|
+          c.set(key, value)
+        end
+        assert_equal value, @dalli.read(key)
+      end
+    end
+  end
+
+  it 'handle passing in anything to the client' do
+    with_activesupport do
+      memcached do
+        connect
+        exception = [ArgumentError, { :message => "Please pass in a block to me executed in the context of the client" }]
+        assert_raises(*exception) { @dalli.dalli 'foo' }
+      end
+    end
+  end
+
   it 'normalize options as expected' do
     with_activesupport do
       memcached do
         @dalli = ActiveSupport::Cache::DalliStore.new('localhost:19122', :expires_in => 1, :namespace => 'foo', :compress => true)
-        assert_equal 1, @dalli.data.instance_variable_get(:@options)[:expires_in]
-        assert_equal 'foo', @dalli.data.instance_variable_get(:@options)[:namespace]
+        @dalli.instance_variable_get(:@pool).with do |mc|
+          assert_equal 1, mc.instance_variable_get(:@options)[:expires_in]
+          assert_equal 'foo', mc.instance_variable_get(:@options)[:namespace]
+        end
       end
     end
   end
