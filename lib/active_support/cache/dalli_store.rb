@@ -48,8 +48,8 @@ module ActiveSupport
                   else
                     addresses
                   end
-        self.clients = {}
-        self.servers = servers
+        self.class.clients = {}
+        self.class.servers = servers
 
         extend Strategy::LocalCache
       end
